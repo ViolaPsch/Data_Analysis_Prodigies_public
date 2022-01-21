@@ -1,0 +1,1154 @@
+---
+title: 'Data Analysis of the Study "Comparison of prodigies & professional musicians"'
+author: "VP"
+date: "2022-01-05"
+output: 
+  html_document: 
+    toc: yes
+---
+
+```{r setup, include = FALSE}
+library(pROC)
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(psych)
+library(ggplot2)
+library(effsize)
+library(Rmisc)
+library(broom)
+library(ggpubr)
+library(tidyverse)
+library(gridExtra)
+library(qgraph)
+library(lm.beta)
+library(RColorBrewer)
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, cache = TRUE)
+
+source("functions.R")
+dir.create("plots")
+
+my_theme <- theme(
+  panel.grid       = element_blank(),
+  axis.line        = element_line(color = "black"),
+  panel.background = element_rect(fill  = "white", colour = NA),
+  axis.title.x     = element_text(
+                       size = 12, 
+                       vjust = -1
+                     ),
+  axis.title.y     = element_text(size = 12)
+)
+```
+This document shows the data analysis used for our paper:
+
+> You *Can* Tell a Prodigy From a Professional Musician: 
+A Replication of Comeau et al.’s (2017) Study
+
+submitted for publication in *Music Psychology*. We also provide a JASP file with any other analyses.
+
+```{r DATA_prtcpnt import}
+DATA_prtcpnt <- fread(
+  "data/DATA_prtcpnt.csv",
+  sep = ",", 
+  encoding = "UTF-8",
+  header = TRUE
+) 
+
+DATA_prtcpnt <- DATA_prtcpnt %>% 
+  mutate(
+    across(
+      matches("Quiz[1-9]"), factor, levels = 1:5),
+    across(
+      c(
+        Language,
+        Retest_prodigy_Yes1No0,
+        Retest_adult_Yes1No0,
+        Pianist,
+        HALT_Headphones1_Loudspeakers2,
+        HALT_MonoStereo,
+        HALT_Stereo1_MonoOrWrong2,
+        Gender,
+        MusicalProfession,
+        PianistAndMusiciansGroups
+      ) |
+      matches("RatingCorrectStim|RatingAsProdigyStim"),
+      factor
+    ),
+    Gender = fct_recode(
+      Gender,
+        "female"        = "1",
+        "male"          = "2",
+        "diverse"       = "3",
+        "not specified" = "4"
+    ),
+    MusicalProfession = fct_recode(
+      MusicalProfession,
+      "Non-musician"                           = "1",
+      "Amateur musician"                       = "2",
+      "Professional musician"                  = "5",
+      "Other (specified in the next variable)" = "6"
+    ),
+    Pianist = fct_recode(
+      Pianist,
+      "Non-musician"             = "0",
+      "Musician, but no pianist" = "1",
+      "Amateur pianist"          = "2",
+      "Professional pianist"     = "4"
+    ) 
+  ) 
+```
+# Dataset 
+*N* = `r nrow(DATA_prtcpnt)`
+
+Levels of factor variables: 
+```{r Levels of factor variables, warning = FALSE}
+sapply(DATA_prtcpnt %>% select(where(is.factor)), levels)
+```
+
+```{r stimuli data stimuli import}
+DATA_stimuli <- fread(
+  "data/DATA_stimuli.csv", 
+  sep = ",", 
+  stringsAsFactors = TRUE
+)
+
+group.colors <- c(
+  "Chopin_op10_5" = "#8DA0CB", 
+  "LvB_op27_2_Mvt.1" = "#E78AC3", 
+  "LvB_op27_2_Mvt.3" = "#A6D854", 
+  "Mozart Piano Conc. No. 23 KV 488 Mvt. 1-Pt. 1" = "#FFD92F", 
+  "Mozart Piano Conc. No. 23 KV 488 Mvt. 1-Pt. 2" = "#E5C494",
+  "adult" = "#66C2A5",
+  "child" = "#FC8D62"
+)
+
+DATA_stimuli_pairs <- DATA_stimuli %>% 
+  group_by(Piece) %>% 
+  dplyr::summarise(
+    across(
+      c(
+        Intensity_Mean_dB,
+        Intensity_SD_dB,
+        Tempo_Mean,
+        Tempo_SD,
+        Overall_correct_responses,
+        JMLE
+      ),
+      mean,
+      .names = "mean_{.col}"
+    ),
+    diff_Intensity_Mean_dB         = max(Intensity_Mean_dB) - min(Intensity_Mean_dB),
+    diff_Intensity_SD_dB           = max(Intensity_SD_dB) - min(Intensity_SD_dB),
+    diff_Tempo_Mean                = max(Tempo_Mean) - min(Tempo_Mean),
+    diff_Tempo_SD                  = max(Tempo_SD)- min(Tempo_SD),
+    diff_overall_correct_responses = max(Overall_correct_responses) - min(Overall_correct_responses)
+  )
+
+DATA_stimuli_pairs <- as.data.table(DATA_stimuli_pairs)
+```
+
+# Number and Proportion of Pianists
+```{r pianist}
+pianists <- round(prop.table(table(DATA_prtcpnt$Pianist)), 3) * 100
+pianists <- as.data.table(pianists)
+colnames(pianists) <- c("Piano Expertise", "Proportion (in %)")
+knitr::kable(pianists, use.names = FALSE)
+```
+
+# Hits, False Alarms, and Overall Correct Responses
+Contingency Table for Hits 
+```{r hits}
+table(DATA_prtcpnt$P_Hits)
+```
+
+Contingency Table for False Alarms
+```{r false alarms}
+table(DATA_prtcpnt$P_FAs)
+```
+
+We had to correct proportions of Hits and False Alarms 
+`r sum(
+  DATA_prtcpnt$P_Hits == 0 |
+  DATA_prtcpnt$P_Hits == 1
+) +
+sum(
+  DATA_prtcpnt$P_FAs  == 0 |  
+  DATA_prtcpnt$P_FAs  == 1   
+  )`
+times, because the proportions were 0 or 1.
+
+
+Proportion of overall correct responses
+```{r correct responses}
+DATA_prtcpnt <- cbind(
+  DATA_prtcpnt[,1:P_FAs],
+  Overall_correct_responses = (DATA_prtcpnt$P_Hits + 1 - DATA_prtcpnt$P_FAs)/2,
+  DATA_prtcpnt[, Sensitivity_d:ncol(DATA_prtcpnt)]
+)
+
+knitr::kable(describe(DATA_prtcpnt[, .(P_Hits, P_FAs, Overall_correct_responses)]), digits = 3)
+```
+
+# AUC and ROC for Each Participant
+## Calculation of ROC and AUC
+We plot the receiver operating characteristic (ROC) curve of every twentieth participant.
+```{r AUC and ROC for each participant, message = FALSE, warning = FALSE}
+DATA_prtcpnt$AUC  <- 9999
+plot_list <- list()
+response  <- rep(c("prodigy", "adult"), 5) # 1 = case = prodigy; 0 = control = adult 
+levels <- c("adult", "prodigy") # the value of the response for controls and cases, respectively
+
+for (i in 1:nrow(DATA_prtcpnt)){   # Find out which median is smaller: 
+  smaller_median <- DATA_prtcpnt[, # the median for prodigy responses or 
+    .(                             # the median for adult responses?  
+      response = response,         
+      predictor = as.numeric(DATA_prtcpnt[i, RatingStim01:RatingStim10])
+    )
+  ][,
+    .(median = median(predictor)),
+    by  = response
+  ][order(median, response)][,median := NULL][1]
+  
+  smaller_median <- as.vector(as.matrix(smaller_median))
+  
+  direction <- ifelse(smaller_median == "prodigy", ">", "<")
+  
+  DATA_prtcpnt[i, "AUC"] <- auc(
+    response  = response, # 1 = case = prodigy; 0 = control = adult 
+    predictor = as.numeric(DATA_prtcpnt[i, RatingStim01:RatingStim10]), 
+    direction = direction,
+    levels    = levels
+  )
+  
+  if (i%%20 == 0){ # Plot every 20th ROC curve
+    plot_list[[i/20]] <- roc(
+      response  = response, # 1 = case = prodigy; 0 = control = adult 
+      predictor = as.numeric(DATA_prtcpnt[i, RatingStim01:RatingStim10]), 
+      direction = direction, 
+      percent   = TRUE, 
+      plot      = TRUE, 
+      ci        = TRUE
+    ) 
+  }
+}
+```
+
+## Descriptive Statistics of AUC
+`r knitr::kable(describe(DATA_prtcpnt$AUC))`
+
+The confidence interval of AUC is:
+[`r round(CI(DATA_prtcpnt$AUC)[c(3, 1)], 2)`].
+
+Histograms of Sensitivity *d'*, Bias *c* and AUC:
+```{r plot histogram with Sensitivity Bias and AUC}
+plot_list <- list()
+
+plot_list[[1]] <- plot_hist(
+  variable = "Sensitivity_d",
+  x_lab = expression(paste("Sensitivity ", italic("d'"))),
+  title = "A",
+  x_intercept = 0, # chance level
+  print_binwidth = FALSE
+)
+
+plot_list[[2]] <- plot_hist(
+  variable = "Bias_c",
+  x_lab = expression(paste("Bias ", italic("c"))),
+  title = "B",
+  x_intercept = NULL,
+  print_binwidth = FALSE
+)
+
+plot_list[[3]] <- plot_hist(
+  variable = "AUC",
+  x_lab = "AUC",
+  title = "C",
+  x_intercept = .5, # chance level
+  print_binwidth = FALSE
+)
+
+plot <- grid.arrange(
+  grobs = plot_list, 
+  ncol = 3, 
+  width = unit(c(2.25, 2.25, 2.25), c("cm"))
+)
+
+ggsave(
+  plot = plot,
+  "Histogramms_d_c_AUC_ggplot.png", 
+  path = "plots",
+  device = "png"
+)
+```
+
+## t-Test and Cohen's d
+Is Mean AUC (`r round(mean(DATA_prtcpnt$AUC), 3)`) significantly greater than chance level (0.5)? How large is this effect?
+```{r t-test}
+t.test(
+  DATA_prtcpnt$AUC, 
+  mu = 0.5, # chance level
+  alternative = "greater" 
+)
+
+effsize::cohen.d(
+  DATA_prtcpnt$AUC, 
+  f = NA,
+  mu = 0.5
+)
+```
+
+# Musical Culture: German (D) and Traditional Chinese (C)
+## Musical Culture and Categorization of Musicianship
+Proportions of each group per language (in %)
+```{r language and musicianship group}
+groups <- table(DATA_prtcpnt[, .(PianistAndMusiciansGroups, Language)])
+
+groups <- rbind(
+  round(
+    prop.table(groups, margin = 2),
+    3
+  ) * 100,
+  Total = c(100, 100)
+)
+
+groups <- data.table(
+  Expertise = c(
+    "Professional pianists",
+    "Other professional musicians",
+    "Amateur pianists",
+    "Other amateur musicians",
+    "Non-musicians",
+    "Total"
+  ),
+  groups
+)
+
+knitr::kable(groups, use.names = FALSE)
+```
+
+## Musical Culture and Classification Performance
+
+Does a difference exist between the two different sub-samples, i.e. the German (D) and Traditional Chinese (C) speaking participants? How large is the effect (Cohen's *d*)?
+```{r t-tests sensitivity, AUC, and correct responses}
+# https://community.rstudio.com/t/use-dplyr-to-do-grouped-t-tests-and-get-number-of-observations-simultanously/23561/2
+
+tab1 <- DATA_prtcpnt %>% 
+  select(
+    Sensitivity_d, 
+    AUC, 
+    Quiz_Score,
+    Overall_correct_responses, 
+    Language # = group
+  ) %>% 
+  gather(key = "variable", value = "value", -Language) %>% # variable = category
+  group_by(variable, Language) %>% 
+  nest() %>% 
+  spread(key = Language, value = data) %>% 
+  mutate(
+    t_test = map2(
+      C, 
+      D, 
+      ~{t.test(.x$value, .y$value, method = "Student's Two Sample t-test") %>% tidy()}
+    ),
+    C = map(C, nrow),
+    D = map(D, nrow)
+  ) %>% 
+  unnest(cols = c(C, D, t_test)) %>% 
+  ungroup() %>%
+  dplyr::rename(
+    Mean_Difference = estimate,
+    value_C = estimate1,
+    value_D = estimate2,
+    t_value = statistic,
+    df = parameter
+  )
+
+tab2 <- DATA_prtcpnt %>% 
+  select(
+    Sensitivity_d, 
+    AUC, 
+    Quiz_Score,
+    Overall_correct_responses, 
+    Language # = group
+  ) %>% 
+  gather(key = "variable", value = "value", -Language) %>% # variable = category
+  group_by(variable) %>%
+  rstatix::cohens_d(
+    value ~ Language,
+    conf.level = .95
+  ) %>%
+  ungroup() %>% 
+  select(-c(.y.,group1, group2, n1, n2))
+ 
+t_test <- tab1 %>% 
+  inner_join(tab2, by = c("variable" = "variable")) %>% 
+  as.data.table()
+
+setorder(t_test[, .n := order(c(4, 1, 2, 3))], .n)[, .n := NULL]
+
+knitr::kable(t_test[, 
+  .(
+    variable, 
+    C,
+    D,
+    "Mean Difference" = round(Mean_Difference, 3),
+    "Value C"         = round(value_C, 3),
+    "Value D"         = round(value_D, 3),
+    "t"               = round(t_value, 2), 
+    "p"               = round(p.value, 3), 
+    df                = round(df, 0),
+    Method            = method,
+    "Effect size"     = round(effsize, 3),
+    "Magnitude"       = magnitude
+  )
+])
+```
+
+# Analysis of Gold-MSI Subscale Perceptual Abilities
+
+We collected data for the general factor of the Gold-MSI, which only comprises two items of the perceptual abilities subscale:  Items MS11_12 ("Ich kann zwei Interpretationen oder Versionen desselben Musikstücks miteinander vergleichen und über die Unterschiede diskutieren.") and MS11_23 ("Wenn ich singe, habe ich keine Ahnung, ob ich richtig oder falsch singe." (reversed). 
+
+Is there a correlation (in the figures below: *R*) between Perceptual Abilities and Sensitivity *d'* or between Perceptual Abilities and AUC?
+```{r Gold-MSI PA}
+DATA_prtcpnt[, GMSI_PA_mean := (GoldMSI_ItemNo12 + GoldMSI_ItemNo23)/2]
+
+cor.test(DATA_prtcpnt$GMSI_PA_mean, DATA_prtcpnt$Sensitivity_d)
+
+(plot_gmsi_PA <- DATA_prtcpnt %>% 
+  ggplot(
+    aes(
+      x = GMSI_PA_mean,
+      y = Sensitivity_d
+    )
+  ) + 
+  geom_jitter(
+    alpha = 0.5,
+    width = 0.05,
+    height = 0,
+    shape = 1
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+  ) +
+  stat_cor() +
+  labs(
+    x = "Mean of the two items of subscale Perceptual Abilities",
+    y = expression(paste("Sensitivity ", italic("d'")))
+  ) +
+  my_theme
+)
+
+ggsave(
+  plot = plot_gmsi_PA,
+  "Subscale_PA_vs_d.png", 
+  path = "plots",
+  device = "png"
+)
+
+cor.test(DATA_prtcpnt$GMSI_PA_mean, DATA_prtcpnt$AUC)
+
+DATA_prtcpnt %>% 
+  ggplot(
+    aes(
+      x = GMSI_PA_mean,
+      y = AUC
+    )
+  ) + 
+  geom_jitter(
+    alpha = 0.5,
+    width = 0.05,
+    height = 0,
+    shape = 1
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+  ) +
+  stat_cor() +
+  labs(
+    x = "Mean of the two items of subscale Perceptual Abilities",
+    y = "Area Under Curve"
+  ) +
+  my_theme
+```
+
+# Analysis of the Stimuli
+## Musical and Acoustic Features
+```{r plot musical features}
+plot_list <- list()
+
+plot_list <- map2(
+  .x = DATA_stimuli[, 
+    .(
+      Intensity_Mean_dB,
+      Intensity_SD_dB,
+      Tempo_Mean,
+      Tempo_SD         
+    )], 
+  .y = c( # x_labs,
+    "Mean Intensity",
+    "SD of Intensity",
+    "Mean Tempo",
+    "SD of Tempo"
+  ),
+  .f = plot_feature, 
+  legend_position = "none",
+  group_colors = group.colors[1:5]
+)
+
+legend_piece <- cowplot::get_legend(
+  plot_feature_only_piece(
+    variable        = DATA_stimuli[["Tempo_SD"]], 
+    label           = "SD of Tempo", 
+    legend_position = "left",
+    group_colors    = group.colors[1:5]
+  )
+)  
+
+legend_category <- cowplot::get_legend(
+  plot_feature_only_performer(
+    variable        = DATA_stimuli[["Tempo_SD"]], 
+    label           = "SD of Tempo", 
+    legend_position = "left"
+  )  
+)
+
+plot_list[[5]] <- legend_piece
+plot_list[[6]] <- legend_category
+  
+lay <- matrix(1:6, ncol = 2, byrow = TRUE)
+
+plot <- grid.arrange(
+  grobs = plot_list, 
+  layout_matrix = lay
+)
+
+ggsave(
+  plot = plot,
+  "Feature_Analysis_descriptive.png", 
+  path = "plots",
+  device = "png"
+)
+```
+
+## Musical Features and Overall Correct Responses
+Is there a relation between musical features and overall correct responses?
+```{r plot musical features and Overall_correct_responses}
+plot_list <- list() 
+
+plot_list <- pmap(
+  .l = list(
+    c( # x_vars
+      "Intensity_Mean_dB",
+      "Intensity_SD_dB",
+      "Tempo_Mean",
+      "Tempo_SD"         
+    ),
+     c( # x_labs
+      "Mean Intensity",
+      "SD of Intensity",
+      "Mean Tempo",
+      "SD of Tempo"
+    ),
+    c(56, 8, 112, 22) # R_positions
+  ),
+  .f = function(x_var, x_lab, R_position){
+    print(as.name(x_var))
+    print(cor.test(
+      DATA_stimuli[[x_var]],
+      DATA_stimuli[, c(Overall_correct_responses)]
+    ))
+    
+    ggplot(
+      data = DATA_stimuli,
+      aes_string(
+        x = x_var, 
+        y = "Overall_correct_responses",
+        color = "Piece"
+      )
+    ) +
+      geom_point(aes(shape = Performer)) + # 16 or 20
+      scale_colour_manual(values = group.colors) +
+      stat_cor(
+        aes(
+          label = ..r.label..,
+          color = Performer
+        ),
+        label.x = R_position
+      ) +
+      stat_cor(
+        aes(
+          label = ..r.label..,
+          color = ""
+        ),
+        label.x = R_position,
+        label.y = 42
+      ) +
+      guides(color = guide_legend(override.aes = list(size = 3))) +  
+      geom_smooth(
+        method = "lm", 
+        formula = y ~ x,
+        se = FALSE,
+        color = "gray"
+      ) +
+      labs(x = x_lab, y = "Correct %", color= "Piece") +
+      theme(legend.position  = "none") +
+      my_theme
+  }
+)
+
+plot_list[[5]] <- legend_piece
+plot_list[[6]] <- legend_category
+
+plot_list[[7]] <- cowplot::get_legend( # legend_performer
+  plot_feature_performer_color(
+    DATA_stimuli[["Tempo_SD"]], 
+    "SD of Tempo", 
+    legend_position = "left"
+  )
+) 
+
+lay <- matrix(
+  c(
+    1, 1, 2, 2,
+    3, 3, 4, 4,
+    5, 5, 6, 7
+  ),
+  ncol = 4,
+  byrow = TRUE
+)
+
+
+plot <- grid.arrange(
+  grobs = plot_list, 
+  layout_matrix = lay
+)
+
+ggsave(
+  plot = plot,
+  "Feature_Analysis_Percent_Correct.png", 
+  path = "plots",
+  device = "png"
+)
+```
+
+
+## Regression
+### Per Item
+The variance of the overall correct response proportion is `r round(var(DATA_stimuli[, Overall_correct_responses]), 1)`, the mean is `r mean(DATA_stimuli[, Overall_correct_responses])`. We conducted a regression analysis to predict participant accuracy as measured by the overall percentage of correct responses using the acoustic features of the stimuli.
+```{r regression per item}
+formula <- 
+  Overall_correct_responses ~ 
+    Intensity_Mean_dB +
+    Intensity_SD_dB +
+    Tempo_Mean +
+    Tempo_SD
+
+model_item_level <- lm(
+  formula = formula,
+  data = DATA_stimuli
+)
+
+summary(model_item_level)
+
+lm.beta(model_item_level)
+
+DATA_stimuli[, prediction_overall_correct_resp := predict(model_item_level)]
+```
+$R^2$ is `r round(summary(model_item_level)$r.squared, 3)`.
+The following plot shows the predicted values of the overall correct proportions:
+
+```{r plot regression prediction}
+(regression_plot <- ggplot(DATA_stimuli, aes(x = prediction_overall_correct_resp, y = Overall_correct_responses)) +
+  geom_point() +
+  geom_abline(color = "darkblue") +
+  stat_cor(
+    aes(label = ..rr.label..), 
+    label.x = 45 
+  ) +
+  labs(
+    x        = "Predicted Overall Correct Responses (in %)",
+    y        = "Overall Correct Responses (in %)",
+    title    = "Linear model prediction",
+    subtitle = "Overall correct responses vs. predicted overall correct responses"
+  ) +
+  my_theme
+)
+
+ggsave(
+  plot = regression_plot,
+  "Feature_Analysis_Regression.png", 
+  path = "plots",
+  device = "png"
+)
+```
+
+### Per Item Pair
+Regression not possible, because *df* = 0.
+
+#### Avg. Overall Correct Responses ~ Avg. Acoustic Feature, and Diff. Overall Correct Responses ~ Diff. Acoustic Feature
+```{r regression on item pairs}
+x_vars <- c(
+  "mean_Intensity_Mean_dB",
+  "mean_Intensity_SD_dB",
+  "mean_Tempo_Mean",
+  "mean_Tempo_SD", 
+  "diff_Intensity_Mean_dB",
+  "diff_Intensity_SD_dB",
+  "diff_Tempo_Mean",
+  "diff_Tempo_SD"         
+)
+
+y_vars <- c(
+  "mean_Overall_correct_responses", 
+  "diff_overall_correct_responses"
+)
+
+x_labs <- c(
+  "Avg. Mean Intensity",
+  "Avg. SD of Intensity",
+  "Avg. Mean Tempo",
+  "Avg. SD of Tempo",
+  "\U0394 Mean Intensity", # \U0394 = Δ
+  "\U0394 SD of Intensity",
+  "\U0394 Mean Tempo",
+  "\U0394 SD of Tempo"
+)
+
+y_labs <- c(
+  "Avg. correct %",
+  "\U0394 correct %" 
+)
+
+R_x_position <- c(
+  62, 6.7, 112, 31,
+  4.8, 0.5, 5, 11
+)
+
+R_y_position <- c(
+  63, 63, 63, 63,
+  13, 13, 13, 13
+)
+
+plot_list <- list() 
+i <- 1
+
+for (x_var in seq_along(x_vars)) {
+  plot_list[[i]] <- ggplot(
+    data = DATA_stimuli_pairs,
+    aes_string(
+      x = x_vars[x_var], 
+      y = y_vars[(i%/% 5) + 1]
+    )
+  ) +
+  geom_point(shape = 16) + # 16 or 20
+  geom_smooth(
+    method = "lm", 
+    formula = y ~ x,
+    se = FALSE,
+    color = "darkblue"
+  ) +
+  stat_cor(
+    aes(label = ..r.label..), 
+    label.x = R_x_position[i],
+    label.y = R_y_position[i]
+  ) +
+  labs(x = x_labs[i], y = y_labs[(i%/% 5) + 1]) +
+  theme(
+    panel.grid       = element_blank(),
+    axis.line        = element_line(color = "black"),
+    panel.background = element_rect(fill  = "white", colour = NA),
+    axis.title.x     = element_text(vjust = -1)
+  )  
+  i <- i + 1
+}
+
+plot <- grid.arrange(
+  grobs = plot_list, 
+  ncol = 4,
+  width = unit(c(4.5, 4.5, 4.5, 4.5), c("cm"))
+)
+
+ggsave(
+  plot = plot,
+  "Feature_Analysis_Item_Pairs_4x2.png", 
+  path = "plots",
+  device = "png"
+)
+```
+
+
+#### Avg. Overall Correct Responses ~ Diff. Acoustic Feature
+```{r regression on item pairs Avg Overall Correct Responses vs Diff Acoustic Feature}
+plot_list <- map2(
+  .x = c( # x_vars
+    "diff_Intensity_Mean_dB",
+    "diff_Intensity_SD_dB",
+    "diff_Tempo_Mean",
+    "diff_Tempo_SD"         
+  ),
+  .y =  c( # x_labs
+    "\U0394 Mean Intensity",
+    "\U0394 SD of Intensity",
+    "\U0394 Mean Tempo",
+    "\U0394 SD of Tempo"
+  ),
+  function(x_var, x_lab) {
+    print(as.name(x_var))
+    print(cor.test(
+      DATA_stimuli_pairs[[x_var]],
+      DATA_stimuli_pairs[, c(mean_Overall_correct_responses)]
+    ))
+    
+    ggplot(
+      data = DATA_stimuli_pairs,
+      aes_string(
+        x = x_var, 
+        y = "mean_Overall_correct_responses"
+      )
+    ) +
+      geom_point(shape = 16) + # 16 or 20
+      geom_smooth(
+        method = "lm", 
+        formula = y ~ x,
+        se = FALSE,
+        color = "darkblue"
+      ) +
+      stat_cor(
+        aes(label = ..r.label..), 
+        label.x = 2 
+      ) +
+      labs(x = x_lab, y = "Avg. correct %") +
+      my_theme  
+  }
+)
+
+plot <- grid.arrange(
+  grobs = plot_list, 
+  ncol = 2,
+  width = unit(c(4,4,4,4), c("cm"))
+)
+
+ggsave(
+  plot = plot,
+  "Feature_Analysis_Item_Pairs_2x2.png", 
+  path = "plots",
+  device = "png"
+)
+```
+
+## AUC on Item Level (per Pair)
+We determine the direction based on the medians.
+```{r directions}
+start <- which(colnames(DATA_prtcpnt) == "RatingStim01")
+end   <- which(colnames(DATA_prtcpnt) == "RatingStim09")
+
+lapply(seq(start, end, 2), function(i) {
+  sapply(
+    DATA_prtcpnt[, (i+1):i],
+    median, 
+    na.rm = T
+  )
+})
+
+# Setting directions: 
+# “>”: if the predictor values for the control group are higher than the values of the case group 
+# (controls > t >= cases). 
+# “<”: if the predictor values for the control group are lower or equal than the values of the case group 
+# (controls < t <= cases)
+# case = prodigy; control = adult
+
+directions <- c(">", ">", ">", "<", "<")
+```
+
+AUC for the five item pairs
+```{r AUC on item pair level, echo=FALSE, message=FALSE}
+levels <- c("adult", "prodigy") # the value of the response for controls and cases, respectively
+
+DATA_stimuli_pairs <- DATA_stimuli_pairs[, 
+  AUC := sapply(seq(start, end, 2), function(i) {
+      auc(
+        response  = factor(
+          c( # 1 = case = prodigy; 0 = control = adult
+            rep("prodigy", nrow(DATA_prtcpnt)), 
+            rep("adult",   nrow(DATA_prtcpnt))
+          ),
+          levels = levels
+        ),
+        predictor = c(DATA_prtcpnt[[i]], DATA_prtcpnt[[i + 1]]), 
+        direction = directions[i%/%2],
+        levels = levels
+      )
+  })
+]
+```
+
+
+```{r plot AUC on item pair level, message=FALSE}
+ROC_curves <- lapply(seq(start, end, 2), function(i) {
+  print(colnames(DATA_prtcpnt)[i])
+  roc(
+    response  = factor(
+      c( # 1 = case = prodigy; 0 = control = adult
+        rep("prodigy", nrow(DATA_prtcpnt)), 
+        rep("adult",   nrow(DATA_prtcpnt))
+      ),
+      levels = levels
+    ),
+    predictor = c(DATA_prtcpnt[[i]], DATA_prtcpnt[[i + 1]]), 
+    direction = directions[i%/%2], 
+    percent   = TRUE, 
+    plot      = TRUE, 
+    ci        = TRUE,
+    print.auc = TRUE
+  ) 
+})
+```
+
+
+The AUC values for each item pair are: `r knitr::kable(DATA_stimuli_pairs[, .(Piece, AUC = round(AUC, 2))])`
+
+Manually plotting the AUC
+
+```{r manually calculating AUC per item pair}
+# https://acutecaretesting.org/en/articles/roc-curves-what-are-they-and-how-are-they-used
+lapply(seq(start, end, 2), function(i) {
+  ROC_data <- data.table(
+    CaseNo = c(DATA_prtcpnt$CaseNo, DATA_prtcpnt$CaseNo), 
+    response  = factor( # correct response
+      c( # 1 = case = prodigy; 0 = control = adult
+        rep("prodigy", nrow(DATA_prtcpnt)),
+        rep("adult", nrow(DATA_prtcpnt))
+      ),
+      levels = c("prodigy", "adult")
+    ),
+    predictor = c(
+      DATA_prtcpnt[[i]],    # response to prodigy stimuli
+      DATA_prtcpnt[[i + 1]] # response to adult stimuli
+    )
+  )
+  
+  ROC_data <- ROC_data %>% 
+    arrange(predictor)
+  
+  ROC_data <- ROC_data %>% 
+    mutate(
+      prodigy_stimulus = ifelse(ROC_data$response == "prodigy", 1, 0), # sick
+      adult_stimulus   = ifelse(ROC_data$response == "adult", 1, 0),
+      sum_prodigy      = cumsum(prodigy_stimulus), # Y (sum)
+      sum_adult        = cumsum(adult_stimulus),   # N (sum)
+      sens             = sum_prodigy/278,
+      x                = sum_adult/278
+    ) %>% 
+    ggplot(aes(x = x, y = sens)) +
+      geom_point() +
+      geom_abline() +
+      labs(
+        x = "1 - specificity (false positive rate)", 
+        y = "Sensitivity (true positive rate)"
+      ) +
+      my_theme
+})
+```
+
+### AUC ~ Overall Proportion of Correct Responses 
+```{r correlation AUC and correct responses, message=FALSE}
+DATA_stimuli_pairs %>% 
+  ggplot(aes(x = AUC, y = mean_Overall_correct_responses, color = Piece)) +
+    geom_point() +
+    stat_cor() +
+    geom_smooth(
+        method = "lm", 
+        formula = y ~ x,
+        se = FALSE,
+        color = "gray"
+    ) +
+  scale_colour_manual(values = group.colors[1:5]) +
+  labs(y = "Mean Overall Correct Responses") +
+  theme(legend.position  = "none") +
+  my_theme
+```
+
+### AUC ~ Diff. Acoustic Feature
+Is there a correlation between AUC for each item pair and the difference between the two values of the acoustic features (one value for adult and one for prodigy)? 
+```{r regression on item pairs AUC vs Diff Acoustic Feature}
+plot_list <- list() 
+
+plot_list <- pmap(
+  .l = list(
+    c( # x_vars
+      "diff_Intensity_Mean_dB",
+      "diff_Intensity_SD_dB",
+      "diff_Tempo_Mean",
+      "diff_Tempo_SD"      
+    ), 
+    c( # x_labs
+      "\U0394 Mean Intensity",
+      "\U0394 SD of Intensity",
+      "\U0394 Mean Tempo",
+      "\U0394 SD of Tempo"
+    ), 
+    c(7.5, 1, 5, 13) # R_positions
+  ),
+  .f = function(x_var, x_lab, R_position){
+    print(as.name(x_var))
+    print(cor.test(
+      DATA_stimuli_pairs[[x_var]],
+      DATA_stimuli_pairs[, c(AUC)]
+    ))
+    
+    ggplot(
+      data = DATA_stimuli_pairs,
+      aes_string(
+        x = x_var, 
+        y = "AUC",
+        color = "Piece"
+      )
+    ) +
+    geom_point(shape = 16) + # 16 or 20
+    scale_colour_manual(values = group.colors) +
+    geom_smooth(
+      method = "lm", 
+      formula = y ~ x,
+      se = FALSE,
+      color = "gray"
+    ) +
+    stat_cor(
+      aes(label = ..r.label.., color = ""), 
+      label.x = R_position 
+    ) +
+    labs(x = x_lab, y = "AUC") +
+    theme(legend.position  = "none") +
+    my_theme  
+   
+  }
+)
+
+plot_list[[5]] <- legend_piece
+
+plot <- grid.arrange(
+  grobs = plot_list, 
+  ncol = 2
+)
+
+ggsave(
+  plot = plot,
+  "Feature_Analysis_Item_Pairs_AUC.png", 
+  path = "plots",
+  device = "png"
+)
+```
+
+# IRT Measures and Acoustic Features
+Is there a relation between the IRT measure JMLE and tempo variability (*SD* of Tempo) or between JMLE and AUC?
+## IRT and Tempo Variability
+```{r plot JMLE and SD tempo}
+plot <- ggplot(DATA_stimuli,
+  aes(
+    x = Tempo_SD, 
+    y = JMLE,
+    color = Piece,
+    group = Performer
+  )) +
+  geom_point(
+    aes(shape = Performer),
+    size = 3
+  ) +
+  geom_smooth(
+    aes(
+      color = "",
+      group = ""
+    ),
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    color = "gray"
+  ) +
+  stat_cor(
+    aes(
+      label = ..r.label..,
+      color = "",
+      group = ""
+    ),
+    label.x = 19
+  ) +
+  stat_cor(
+    aes(
+      label = ..p.label..,
+      color = "",
+      group = ""
+    ),
+    label.x = 35
+  ) +
+  labs(x = "Tempo (SD)", y = "JMLE (Mean)") +
+  scale_colour_manual(values = group.colors[1:5]) +
+  theme(legend.position  = "none") +
+  my_theme
+
+lay <- matrix(
+  c(1, 1, 2, 3),
+  ncol = 2
+)
+
+grid.arrange(
+  grobs = list(
+    plot, 
+    legend_piece,
+    legend_category
+  ), 
+  layout_matrix = lay
+)
+```
+
+## IRT and AUC
+```{r plot JMLE and AUC}
+plot <- ggplot(DATA_stimuli_pairs,
+  aes(
+    x = AUC, 
+    y = mean_JMLE,
+    color = Piece
+  )) +
+  geom_point(
+    size = 3
+  ) +
+  geom_smooth(
+    aes(
+      color = "",
+      group = ""
+    ),
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    color = "gray"
+  ) +
+  stat_cor(
+    aes(
+      label = ..r.label..,
+      color = "",
+      group = ""
+    ),
+    label.x = .5
+  ) +
+  stat_cor(
+    aes(
+      label = ..p.label..,
+      color = "",
+      group = ""
+    ),
+    label.x = .6
+  ) +
+  labs(y = "JMLE (Mean)") +
+  scale_colour_manual(values = group.colors[1:5]) +
+  theme(legend.position  = "none") +
+  my_theme
+
+grid.arrange(
+  grobs = list(
+    plot, 
+    legend_piece
+  ), 
+  ncol = 2
+)
+```

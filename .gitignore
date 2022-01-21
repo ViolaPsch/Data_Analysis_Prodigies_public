@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+plots/*.png
+*.docx
+*.Rproj
+DATA_ANALYSIS_cache/
+DATA_ANALYSIS_files/
+data/DATA_prtcpnt.csv
+*.ipynb
+*.Rhtml

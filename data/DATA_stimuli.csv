@@ -1,0 +1,11 @@
+"number","Piece","Performer","Intensity_Mean_dB","Intensity_SD_dB","Tempo_Mean","Tempo_SD","Overall_correct_responses","JMLE"
+1,"Chopin_op10_5","child",69.78,6.66,120.7,27.93,45.3,0.38
+2,"Chopin_op10_5","adult",68.77,7,108.74,20.78,60.8,-0.32
+3,"LvB_op27_2_Mvt.1","child",63.83,3.63,127.84,18.99,62.2,-0.38
+4,"LvB_op27_2_Mvt.1","adult",54.31,4.3,137.6,39.09,67.3,-0.62
+5,"LvB_op27_2_Mvt.3","child",70.79,7.46,126,30.4,60.8,-0.32
+6,"LvB_op27_2_Mvt.3","adult",67.47,6.62,120.77,26.28,52.2,0.07
+7,"Mozart Piano Conc. No. 23 KV 488 Mvt. 1-Pt. 1","child",59.74,11.26,103.7,31.89,38.8,0.67
+8,"Mozart Piano Conc. No. 23 KV 488 Mvt. 1-Pt. 1","adult",64.15,9.31,118.39,43.33,54,-0.01
+9,"Mozart Piano Conc. No. 23 KV 488 Mvt. 1-Pt. 2","child",62.07,10.26,114.27,42.36,47.8,0.26
+10,"Mozart Piano Conc. No. 23 KV 488 Mvt. 1-Pt. 2","adult",68.94,7.19,132.05,38.64,47.8,0.26
