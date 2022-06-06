@@ -8,6 +8,8 @@ output:
 ---
 
 ```{r setup, include = FALSE}
+rm(list = ls())
+
 library(pROC)
 library(dplyr)
 library(data.table)
@@ -23,6 +25,8 @@ library(gridExtra)
 library(qgraph)
 library(lm.beta)
 library(RColorBrewer)
+library(stargazer)
+library (car)
 
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, cache = TRUE)
 
@@ -98,6 +102,7 @@ DATA_prtcpnt <- DATA_prtcpnt %>%
     ) 
   ) 
 ```
+
 # Dataset 
 *N* = `r nrow(DATA_prtcpnt)`
 
@@ -190,6 +195,64 @@ DATA_prtcpnt <- cbind(
 knitr::kable(describe(DATA_prtcpnt[, .(P_Hits, P_FAs, Overall_correct_responses)]), digits = 3)
 ```
 
+# Sensitivity *d'*
+## Descriptive Statistics
+```{r sensitivity descriptive statistics}
+knitr::kable(describe(DATA_prtcpnt[, .(Sensitivity_d)]), digits = 3)
+```
+
+## Sensitivity *d'* of Different Groups
+```{r}
+summary_sensitivity_d <- DATA_prtcpnt %>% 
+  group_by(
+    "Level of Expertise" = fct_recode(
+      PianistAndMusiciansGroups, 
+      !!!c(
+        "Professional pianists" = "A",
+        "Other professional musicians" = "B",
+        "Amateur pianists" = "C",
+        "Other amateur musicians" = "D",
+        "Non-musicians" = "E"
+      )
+    )
+  ) %>%
+  dplyr::summarise(
+    n = n(),                                                                                         Mean = mean(Sensitivity_d, na.rm = TRUE),
+    SD = sd(Sensitivity_d, na.rm = TRUE),
+    LL = Mean - qt(.975, (n - 1))*SD/sqrt(n()),                                             
+    UL = Mean + qt(.975, (n - 1))*SD/sqrt(n())                                                    )
+
+summary_sensitivity_d %>% 
+  mutate(
+    "Level of Expertise" = sapply(
+      paste0(str_replace_all(`Level of Expertise`, " ", "\n"), "\n(n = ", n, ")"), 
+      function(x) factor(x, levels = x)
+    )
+  ) %>% 
+  ggplot(aes(y = Mean, x = `Level of Expertise`)) + 
+    geom_point() + 
+    geom_errorbar(aes(ymin = LL, ymax = UL), width = 0.2) + 
+    scale_y_continuous(breaks = -1:7/10) +
+    labs(y = expression(paste("Sensitivity ", italic("d'")))) +
+    theme_bw()
+```
+
+## T-test and Cohens'd
+```{r sensitivity t-Test and Cohens d}
+t.test(
+  DATA_prtcpnt$Sensitivity_d, 
+  mu = 0, # chance level
+  alternative = "two.sided" 
+)
+
+effsize::cohen.d(
+  DATA_prtcpnt$Sensitivity_d, 
+  f = NA,
+  mu = 0
+)
+```
+
+
 # AUC and ROC for Each Participant
 ## Calculation of ROC and AUC
 We plot the receiver operating characteristic (ROC) curve of every twentieth participant.
@@ -199,25 +262,11 @@ plot_list <- list()
 response  <- rep(c("prodigy", "adult"), 5) # 1 = case = prodigy; 0 = control = adult 
 levels <- c("adult", "prodigy") # the value of the response for controls and cases, respectively
 
-for (i in 1:nrow(DATA_prtcpnt)){   # Find out which median is smaller: 
-  smaller_median <- DATA_prtcpnt[, # the median for prodigy responses or 
-    .(                             # the median for adult responses?  
-      response = response,         
-      predictor = as.numeric(DATA_prtcpnt[i, RatingStim01:RatingStim10])
-    )
-  ][,
-    .(median = median(predictor)),
-    by  = response
-  ][order(median, response)][,median := NULL][1]
-  
-  smaller_median <- as.vector(as.matrix(smaller_median))
-  
-  direction <- ifelse(smaller_median == "prodigy", ">", "<")
-  
+for (i in 1:nrow(DATA_prtcpnt)){
   DATA_prtcpnt[i, "AUC"] <- auc(
-    response  = response, # 1 = case = prodigy; 0 = control = adult 
+    response  = response, # 1 = case = Wunderkind; 0 = control = Erwachsener 
     predictor = as.numeric(DATA_prtcpnt[i, RatingStim01:RatingStim10]), 
-    direction = direction,
+    direction = ">", # control = adults = c(5, 6, 7, 8) > c(1, 2, 3, 4) = prodigy = case 
     levels    = levels
   )
   
@@ -225,7 +274,7 @@ for (i in 1:nrow(DATA_prtcpnt)){   # Find out which median is smaller:
     plot_list[[i/20]] <- roc(
       response  = response, # 1 = case = prodigy; 0 = control = adult 
       predictor = as.numeric(DATA_prtcpnt[i, RatingStim01:RatingStim10]), 
-      direction = direction, 
+      direction = ">", 
       percent   = TRUE, 
       plot      = TRUE, 
       ci        = TRUE
@@ -249,6 +298,7 @@ plot_list[[1]] <- plot_hist(
   x_lab = expression(paste("Sensitivity ", italic("d'"))),
   title = "A",
   x_intercept = 0, # chance level
+  x_intercept_2 = 0.13,
   print_binwidth = FALSE
 )
 
@@ -278,7 +328,10 @@ ggsave(
   plot = plot,
   "Histogramms_d_c_AUC_ggplot.png", 
   path = "plots",
-  device = "png"
+  device = "png",
+  width = 8.36,
+  height = 4.24,
+  units = "in"
 )
 ```
 
@@ -328,11 +381,36 @@ knitr::kable(groups, use.names = FALSE)
 ```
 
 ## Musical Culture and Classification Performance
+Descriptive statistics
+```{r  Descriptive statistics}
+# https://stackoverflow.com/questions/25389683/obtaining-separate-summary-statistics-by-categorical-variable-with-stargazer-pac
+
+DATA_prtcpnt %>% 
+  select(
+    Sensitivity_d, 
+    AUC, 
+    Quiz_Score,
+    Overall_correct_responses, 
+    Language # = group
+  ) %>% 
+  split(. $Language) %>% 
+  walk(~ stargazer(., type = "text"))
+```
 
 Does a difference exist between the two different sub-samples, i.e. the German (D) and Traditional Chinese (C) speaking participants? How large is the effect (Cohen's *d*)?
 ```{r t-tests sensitivity, AUC, and correct responses}
 # https://community.rstudio.com/t/use-dplyr-to-do-grouped-t-tests-and-get-number-of-observations-simultanously/23561/2
 
+# Levene-Test
+DATA_prtcpnt[, c(
+   "Sensitivity_d", 
+   "AUC", 
+   "Quiz_Score",
+   "Overall_correct_responses"
+ )] %>% 
+lapply(leveneTest, DATA_prtcpnt$Language)
+
+# t-test
 tab1 <- DATA_prtcpnt %>% 
   select(
     Sensitivity_d, 
@@ -349,7 +427,7 @@ tab1 <- DATA_prtcpnt %>%
     t_test = map2(
       C, 
       D, 
-      ~{t.test(.x$value, .y$value, method = "Student's Two Sample t-test") %>% tidy()}
+      ~{t.test(.x$value, .y$value) %>% tidy()} # Student's t-test: <, var.equal = TRUE>
     ),
     C = map(C, nrow),
     D = map(D, nrow)
@@ -634,6 +712,82 @@ ggsave(
 )
 ```
 
+##  Musical Features and Classification
+```{r Classification}
+DATA_stimuli <- DATA_stimuli %>% mutate(
+  classification = case_when(
+    (Performer == "adult" & Overall_correct_responses > 50) |  
+    (Performer == "child" & Overall_correct_responses < 50) ~ "adult",
+    (Performer == "child" & Overall_correct_responses > 50) |  
+    (Performer == "adult" & Overall_correct_responses < 50) ~ "child")  
+  )
+
+plot_list <- list()
+
+plot_list <- pmap(
+  .l = list(
+    x_var = DATA_stimuli[, 
+      .(
+        Intensity_Mean_dB,
+        Intensity_SD_dB,
+        Tempo_Mean,
+        Tempo_SD         
+      )], 
+    x_lab = c( # x_labs,
+      "Mean Intensity",
+      "SD of Intensity",
+      "Mean Tempo",
+      "SD of Tempo"
+    ),
+    title = c("A", "B", "C", "D")
+  ),
+  .f = function(x_var, x_lab, title, ...) {
+    ggplot(
+      data = DATA_stimuli,
+      aes_string(
+        x = "classification", 
+        y = x_var
+      )
+    ) +
+      geom_boxplot() +
+      geom_point(
+        shape = 21, 
+        aes(color = Performer),
+        alpha = .75
+      ) +
+      labs(y = x_lab, x = "Classification") +
+      ggtitle(title) +
+      scale_colour_manual(values = group.colors[6:7]) +
+      my_theme +
+      theme(legend.position = "none")
+  }
+)
+  
+plot_list[[5]] <- cowplot::get_legend( # legend_performer
+  plot_feature_performer_color(
+    DATA_stimuli[["Tempo_SD"]], 
+    "SD of Tempo", 
+    legend_position = "top"
+  )
+) 
+
+lay <- matrix(1:6, ncol = 2, byrow = TRUE)
+
+plot <- grid.arrange(
+  grobs = plot_list, 
+  layout_matrix = lay
+)
+
+ggsave(
+  plot = plot,
+  "Boxplot_Classifications_Acoustical_Features.png", 
+  path = "plots",
+  device = "png",
+  width = 11.8,
+  height = 13.6,
+  units = "cm"
+)
+```
 
 ## Regression
 ### Per Item
@@ -840,18 +994,10 @@ ggsave(
 ```
 
 ## AUC on Item Level (per Pair)
-We determine the direction based on the medians.
-```{r directions}
+AUC for the five item pairs
+```{r AUC on item pair level, echo=FALSE, message=FALSE}
 start <- which(colnames(DATA_prtcpnt) == "RatingStim01")
 end   <- which(colnames(DATA_prtcpnt) == "RatingStim09")
-
-lapply(seq(start, end, 2), function(i) {
-  sapply(
-    DATA_prtcpnt[, (i+1):i],
-    median, 
-    na.rm = T
-  )
-})
 
 # Setting directions: 
 # “>”: if the predictor values for the control group are higher than the values of the case group 
@@ -860,11 +1006,6 @@ lapply(seq(start, end, 2), function(i) {
 # (controls < t <= cases)
 # case = prodigy; control = adult
 
-directions <- c(">", ">", ">", "<", "<")
-```
-
-AUC for the five item pairs
-```{r AUC on item pair level, echo=FALSE, message=FALSE}
 levels <- c("adult", "prodigy") # the value of the response for controls and cases, respectively
 
 DATA_stimuli_pairs <- DATA_stimuli_pairs[, 
@@ -878,7 +1019,7 @@ DATA_stimuli_pairs <- DATA_stimuli_pairs[,
           levels = levels
         ),
         predictor = c(DATA_prtcpnt[[i]], DATA_prtcpnt[[i + 1]]), 
-        direction = directions[i%/%2],
+        direction = ">",
         levels = levels
       )
   })
@@ -898,7 +1039,7 @@ ROC_curves <- lapply(seq(start, end, 2), function(i) {
       levels = levels
     ),
     predictor = c(DATA_prtcpnt[[i]], DATA_prtcpnt[[i + 1]]), 
-    direction = directions[i%/%2], 
+    direction = ">", 
     percent   = TRUE, 
     plot      = TRUE, 
     ci        = TRUE,
