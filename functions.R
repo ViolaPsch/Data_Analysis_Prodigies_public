@@ -1,8 +1,8 @@
 plot_hist <- function(variable, x_lab, title, x_intercept, x_intercept_2 = NULL, print_binwidth){
   # determine the binwidth
   x <- ceiling(
-    max(DATA_prtcpnt[[variable]]) - 
-      min(DATA_prtcpnt[[variable]])
+    max(DATA_prtcpnt[[variable]], na.rm = TRUE) - 
+      min(DATA_prtcpnt[[variable]], na.rm = TRUE)
   ) / 10
   
   while (x <= 1 & 1000 %% (x*1000) > 0.01){ # multiple of binwidth should be 1 (https://stackoverflow.com/questions/13614749/modulus-bug-in-r)
@@ -19,15 +19,15 @@ plot_hist <- function(variable, x_lab, title, x_intercept, x_intercept_2 = NULL,
   ifelse(print_binwidth, print(binwidth), "") 
   
   # specify the left/lower limit of the scale
-  x_lim_right <- ceiling(max(DATA_prtcpnt[[variable]])/(binwidth/2))*(binwidth/2)
+  x_lim_right <- ceiling(max(DATA_prtcpnt[[variable]], na.rm = TRUE)/(binwidth/2))*(binwidth/2)
   
-  if(x_lim_right <= max(DATA_prtcpnt[[variable]]) + (binwidth/2)){
+  if(x_lim_right <= max(DATA_prtcpnt[[variable]], na.rm = TRUE) + (binwidth/2)){
     x_lim_right <- x_lim_right + (binwidth/2)
   }
   
-  x_lim_left  <- floor(min(DATA_prtcpnt[[variable]])/(binwidth/2))*(binwidth/2)
+  x_lim_left  <- floor(min(DATA_prtcpnt[[variable]], na.rm = TRUE)/(binwidth/2))*(binwidth/2)
   
-  if(x_lim_left >= min(DATA_prtcpnt[[variable]]) - (binwidth/2)){
+  if(x_lim_left >= min(DATA_prtcpnt[[variable]], na.rm = TRUE) - (binwidth/2)){
     x_lim_left <- x_lim_left - (binwidth/2)
   }
   
