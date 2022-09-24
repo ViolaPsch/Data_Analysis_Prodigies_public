@@ -11,7 +11,6 @@ output:
 rm(list = ls())
 
 library(pROC)
-library(dplyr)
 library(data.table)
 library(magrittr)
 library(psych)
@@ -26,7 +25,8 @@ library(qgraph)
 library(lm.beta)
 library(RColorBrewer)
 library(stargazer)
-library (car)
+library(car)
+library(dplyr)
 
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, cache = TRUE)
 
@@ -88,14 +88,14 @@ DATA_prtcpnt <- DATA_prtcpnt %>%
     ),
     MusicalProfession = fct_recode(
       MusicalProfession,
-      "Non-musician"                           = "1",
+      "Nonmusician"                           = "1",
       "Amateur musician"                       = "2",
       "Professional musician"                  = "5",
       "Other (specified in the next variable)" = "6"
     ),
     Pianist = fct_recode(
       Pianist,
-      "Non-musician"             = "0",
+      "Nonmusician"             = "0",
       "Musician, but no pianist" = "1",
       "Amateur pianist"          = "2",
       "Professional pianist"     = "4"
@@ -185,14 +185,134 @@ times, because the proportions were 0 or 1.
 
 
 Proportion of overall correct responses
-```{r correct responses}
+```{r correct responses overall}
 DATA_prtcpnt <- cbind(
   DATA_prtcpnt[,1:P_FAs],
   Overall_correct_responses = (DATA_prtcpnt$P_Hits + 1 - DATA_prtcpnt$P_FAs)/2,
   DATA_prtcpnt[, Sensitivity_d:ncol(DATA_prtcpnt)]
 )
 
-knitr::kable(describe(DATA_prtcpnt[, .(P_Hits, P_FAs, Overall_correct_responses)]), digits = 3)
+knitr::kable(
+  describe(DATA_prtcpnt[, .(
+    P_Hits, 
+    Misses = 1 - P_Hits, 
+    "Correct rejections" = 1 - P_FAs, 
+    P_FAs, 
+    Overall_correct_responses
+  )]*100,
+  skew = FALSE, trim=.1),
+  digits = 2
+)
+```
+
+The confidence interval of P_Hits, P_FAs, and overall correct responses are:
+```{r confidence interval of P_Hits P_FAs and overall correct responses, echo=FALSE}
+DATA_prtcpnt %>% 
+  transmute(
+    P_Hits, 
+    Misses = 1 - P_Hits,
+    Correct_rejections = 1 - P_FAs,
+    P_FAs, 
+    Overall_correct_responses
+  ) %>% 
+  summarise(across(
+    .cols = everything(),
+    .fns = ~ list(round(CI(.x * 100)[c(3,1)], 2))
+  )) %>% 
+  unnest(cols = c(
+    P_Hits, 
+    Misses, 
+    Correct_rejections, 
+    P_FAs, 
+    Overall_correct_responses
+  )) %>% 
+  data.table::transpose(keep.names = "95% CI for Proportion in % for") %>% 
+  rename("Lower" = V1, "Upper" = V2)
+
+lapply(DATA_prtcpnt[, c("P_Hits", "P_FAs", "Overall_correct_responses")]*100, function(x) round(CI(x)[c(3, 1)], 2))
+
+DATA_prtcpnt %>% 
+  transmute(
+    P_Hits, 
+    Misses = 1 - P_Hits,
+    Correct_rejections = 1 - P_FAs,
+    P_FAs, 
+    Overall_correct_responses
+  ) %>% 
+  summarise(across(
+    .cols = everything(),
+    .fns = list(
+      M  = ~ mean(.x * 100) %>% round(2),
+      SD = ~ sd(.x * 100) %>% round(2)
+    ),
+    .names = "{.col}-{.fn}"
+  ),
+  ) %>% 
+  data.table::transpose(keep.names = "Proportion") %>% 
+  separate(col = Proportion, into = c("Proportion", "Statistic"), sep = "-") %>% 
+  tidyr::pivot_wider(Proportion, names_from = "Statistic", values_from = "V1") %>% 
+  mutate(
+    SE    = (SD/sqrt(nrow(DATA_prtcpnt))) %>% round(2),
+    CI_LL = (M - 1.96*SE) %>% round(2),
+    CI_UL = (M + 1.96*SE) %>% round(2)
+  )
+
+```
+
+```{r correct responses subgroups}
+DATA_prtcpnt %>% 
+  mutate(PianistAndMusiciansGroups = "Overall") %>% 
+  rbind(DATA_prtcpnt) %>% 
+  group_by(
+    "Level of Expertise" = fct_recode(
+      PianistAndMusiciansGroups, 
+      "Professional pianists" = "A",
+      "Other professional musicians" = "B",
+      "Amateur pianists" = "C",
+      "Other amateur musicians" = "D",
+      "Nonmusicians" = "E"
+    ) %>% 
+      fct_shift()
+    ) %>% 
+  rbind(
+    DATA_prtcpnt %>% mutate(
+      "Level of Expertise" = if_else(
+        PianistAndMusiciansGroups != "E", 
+        "Musicians", 
+        "Nonmusicians (Hypothesis B)"
+      ) %>% as_factor()
+    )
+  ) %>% 
+  rbind(
+    DATA_prtcpnt %>% mutate(
+      "Level of Expertise" = if_else(
+        PianistAndMusiciansGroups == "A", 
+        "Pianists", 
+        "Other"
+      ) %>% factor(levels = c("Pianists", "Other"))
+    )
+  ) %>% 
+  mutate( # Convert decimal number to percent
+    Overall_correct_responses = Overall_correct_responses * 100
+  ) %>%
+  dplyr::summarise(
+    n                     = n(),
+    "%"                   = n()/nrow(DATA_prtcpnt) * 100,
+    "M (Sensitivity d')"  = mean(Sensitivity_d),
+    "SD (Sensitivity d')" = sd(Sensitivity_d),
+    "SE (Sensitivity d')" = `SD (Sensitivity d')`/sqrt(n),
+    "LL (Sensitivity d')" = `M (Sensitivity d')` - qt(.975, (n - 1))*`SD (Sensitivity d')`/sqrt(n()),                                     
+    "UL (Sensitivity d')" = `M (Sensitivity d')` + qt(.975, (n - 1))*`SD (Sensitivity d')`/sqrt(n()),
+    "M (% correct)"       = mean(Overall_correct_responses),
+    "SD (% correct)"      = sd(Overall_correct_responses),
+    "SE (% correct)"      = `SD (% correct)`/sqrt(n)
+  ) %>% 
+  mutate(
+    across("%", round, 1),
+    across(c("M (Sensitivity d')", "SD (Sensitivity d')", "SE (Sensitivity d')", `M (% correct)`, `SD (% correct)`), round, 2),
+    across(c( "LL (Sensitivity d')", "UL (Sensitivity d')"), round, 3)
+  ) %>% 
+  knitr::kable()
 ```
 
 # Sensitivity *d'*
@@ -200,6 +320,9 @@ knitr::kable(describe(DATA_prtcpnt[, .(P_Hits, P_FAs, Overall_correct_responses)
 ```{r sensitivity descriptive statistics}
 knitr::kable(describe(DATA_prtcpnt[, .(Sensitivity_d)]), digits = 3)
 ```
+
+The confidence interval of AUC is:
+[`r round(CI(DATA_prtcpnt$Sensitivity_d)[c(3, 1)], 2)`].
 
 ## Sensitivity *d'* of Different Groups
 ```{r}
@@ -212,12 +335,13 @@ summary_sensitivity_d <- DATA_prtcpnt %>%
         "Other professional musicians" = "B",
         "Amateur pianists" = "C",
         "Other amateur musicians" = "D",
-        "Non-musicians" = "E"
+        "Nonmusicians" = "E"
       )
     )
   ) %>%
   dplyr::summarise(
-    n = n(),                                                                                         Mean = mean(Sensitivity_d, na.rm = TRUE),
+    n = n(), 
+    Mean = mean(Sensitivity_d, na.rm = TRUE),
     SD = sd(Sensitivity_d, na.rm = TRUE),
     LL = Mean - qt(.975, (n - 1))*SD/sqrt(n()),                                             
     UL = Mean + qt(.975, (n - 1))*SD/sqrt(n())                                                    )
@@ -252,6 +376,14 @@ effsize::cohen.d(
 )
 ```
 
+# Bias *c*
+## Descriptive Statistics
+```{r bias c descriptive statistics}
+knitr::kable(describe(DATA_prtcpnt[, .(Bias_c)]), digits = 3)
+```
+
+The confidence interval of AUC is:
+[`r round(CI(DATA_prtcpnt$Bias_c)[c(3, 1)], 2)`].
 
 # AUC and ROC for Each Participant
 ## Calculation of ROC and AUC
@@ -284,12 +416,29 @@ for (i in 1:nrow(DATA_prtcpnt)){
 ```
 
 ## Descriptive Statistics of AUC
-`r knitr::kable(describe(DATA_prtcpnt$AUC))`
+`r knitr::kable(describe(DATA_prtcpnt$AUC), digits = c(0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 3))`
 
 The confidence interval of AUC is:
 [`r round(CI(DATA_prtcpnt$AUC)[c(3, 1)], 2)`].
 
-Histograms of Sensitivity *d'*, Bias *c* and AUC:
+
+## t-Test and Cohen's d
+Is Mean AUC (`r round(mean(DATA_prtcpnt$AUC), 3)`) significantly greater than chance level (0.5)? How large is this effect?
+```{r t-test}
+t.test(
+  DATA_prtcpnt$AUC, 
+  mu = 0.5, # chance level
+  alternative = "greater" 
+)
+
+effsize::cohen.d(
+  DATA_prtcpnt$AUC, 
+  f = NA,
+  mu = 0.5
+)
+```
+
+# Histograms of Sensitivity *d'*, Bias *c* and AUC:
 ```{r plot histogram with Sensitivity Bias and AUC}
 plot_list <- list()
 
@@ -335,22 +484,6 @@ ggsave(
 )
 ```
 
-## t-Test and Cohen's d
-Is Mean AUC (`r round(mean(DATA_prtcpnt$AUC), 3)`) significantly greater than chance level (0.5)? How large is this effect?
-```{r t-test}
-t.test(
-  DATA_prtcpnt$AUC, 
-  mu = 0.5, # chance level
-  alternative = "greater" 
-)
-
-effsize::cohen.d(
-  DATA_prtcpnt$AUC, 
-  f = NA,
-  mu = 0.5
-)
-```
-
 # Musical Culture: German (D) and Traditional Chinese (C)
 ## Musical Culture and Categorization of Musicianship
 Proportions of each group per language (in %)
@@ -371,7 +504,7 @@ groups <- data.table(
     "Other professional musicians",
     "Amateur pianists",
     "Other amateur musicians",
-    "Non-musicians",
+    "Nonmusicians",
     "Total"
   ),
   groups
@@ -406,7 +539,8 @@ DATA_prtcpnt[, c(
    "Sensitivity_d", 
    "AUC", 
    "Quiz_Score",
-   "Overall_correct_responses"
+   "Overall_correct_responses",
+   "GoldMSI_Score"
  )] %>% 
 lapply(leveneTest, DATA_prtcpnt$Language)
 
@@ -417,6 +551,7 @@ tab1 <- DATA_prtcpnt %>%
     AUC, 
     Quiz_Score,
     Overall_correct_responses, 
+    GoldMSI_Score,
     Language # = group
   ) %>% 
   gather(key = "variable", value = "value", -Language) %>% # variable = category
@@ -432,9 +567,11 @@ tab1 <- DATA_prtcpnt %>%
     C = map(C, nrow),
     D = map(D, nrow)
   ) %>% 
-  unnest(cols = c(C, D, t_test)) %>% 
+  unnest(cols = c(t_test)) %>% 
   ungroup() %>%
   dplyr::rename(
+    "n C" = C, 
+    "n D" = D,
     Mean_Difference = estimate,
     value_C = estimate1,
     value_D = estimate2,
@@ -448,6 +585,21 @@ tab2 <- DATA_prtcpnt %>%
     AUC, 
     Quiz_Score,
     Overall_correct_responses, 
+    GoldMSI_Score,
+    Language # = group
+  ) %>% 
+  group_by(Language) %>% 
+  summarise(across(.fns = sd, .names = "{.col}")) %>% 
+  data.table::transpose(keep.names = "variable", make.names = "Language") %>% 
+  rename("SD C" = C, "SD D" = D)
+
+tab3 <- DATA_prtcpnt %>% 
+  select(
+    Sensitivity_d, 
+    AUC, 
+    Quiz_Score,
+    Overall_correct_responses, 
+    GoldMSI_Score,
     Language # = group
   ) %>% 
   gather(key = "variable", value = "value", -Language) %>% # variable = category
@@ -460,19 +612,22 @@ tab2 <- DATA_prtcpnt %>%
   select(-c(.y.,group1, group2, n1, n2))
  
 t_test <- tab1 %>% 
-  inner_join(tab2, by = c("variable" = "variable")) %>% 
+  inner_join(tab2, by = "variable") %>% 
+  inner_join(tab3, by = "variable") %>% 
   as.data.table()
 
-setorder(t_test[, .n := order(c(4, 1, 2, 3))], .n)[, .n := NULL]
+setorder(t_test[, .n := order(c(5, 1, 2, 3, 4))], .n)[, .n := NULL]
 
 knitr::kable(t_test[, 
   .(
     variable, 
-    C,
-    D,
+    `n C`,
+    `n D`,
     "Mean Difference" = round(Mean_Difference, 3),
-    "Value C"         = round(value_C, 3),
-    "Value D"         = round(value_D, 3),
+    "Mean C"          = round(value_C, 3),
+    "Mean D"          = round(value_D, 3),
+    "SD C"            = round(`SD C`, 3),
+    "SD D"            = round(`SD D`, 3),
     "t"               = round(t_value, 2), 
     "p"               = round(p.value, 3), 
     df                = round(df, 0),
